@@ -22,7 +22,7 @@ bool HapticsPrismFactory::create(const char *name, float x, float y, float z)
     if (!(obj && simulation()->add_object(*obj)))
             return false;
 
-    obj->m_position.setd(x, y, z);
+    obj->m_position.setValue(x, y, z);
 
     return true;
 }
@@ -35,7 +35,7 @@ bool HapticsSphereFactory::create(const char *name, float x, float y, float z)
     if (!(obj && simulation()->add_object(*obj)))
             return false;
 
-    obj->m_position.setd(x, y, z);
+    obj->m_position.setValue(x, y, z);
 
     return true;
 }
@@ -57,7 +57,7 @@ bool HapticsMeshFactory::create(const char *name, const char *filename,
     if (!(obj && simulation()->add_object(*obj)))
             return false;
 
-    obj->m_position.setd(x, y, z);
+    obj->m_position.setValue(x, y, z);
 
     return true;
 }
@@ -102,11 +102,16 @@ void HapticsSim::initialize()
         m_bSelfTimed = false;
 #endif
 
+    // ensure workspace is recalibrated
+    m_resetWorkspace = true;
+    m_learnWorkspace = true;
+
     // quit the haptics simulation if the cursor couldn't be initialized.
     if (!m_cursor->is_initialized())
-        m_bDone = true;
-    else
     {
+        // turn off workspace scaling
+        m_learnWorkspace = false;
+
         // create the corresponding visual cursor
         simulation()->sendtotype(Simulation::ST_VISUAL, false,
                                  "/world/sphere/create","sfff",
@@ -114,10 +119,24 @@ void HapticsSim::initialize()
         simulation()->sendtotype(Simulation::ST_VISUAL, false,
                                  "/world/cursor/color","fff",
                                  1.0, 1.0, 0.0);
-    }
 
-    // ensure workspace is recalibrated
-    m_resetWorkspace = true;
+        // Create a virtual device named "device"
+        simulation()->sendtotype(Simulation::ST_VISUAL, false,
+                                 "/world/virtdev/create","sfff",
+                                 "device", 0.0, 0.0, 0.0);
+        simulation()->sendtotype(Simulation::ST_VISUAL, false,
+                                 "/world/virtdev/color","fff",
+                                 1.0, 0.0, 0.0);
+
+        // Create a local object to accept messages from the virtual device
+        m_pVirtdev = new OscHapticsVirtdevCHAI(m_chaiWorld, "device", this);
+
+        // Hook it up to the cursor
+        m_cursor->initializeWithDevice(m_chaiWorld, m_pVirtdev->object());
+
+        if (!m_cursor->is_initialized())
+            m_bDone = true;
+    }
 
     // initialize step count
     m_counter = 0;
@@ -127,7 +146,7 @@ void HapticsSim::initialize()
     Simulation::initialize();
 }
 
-void HapticsSim::updateWorkspace(cVector3d &pos)
+void HapticsSim::updateWorkspace(cVector3d &pos, cVector3d &vel)
 {
     int i;
     if (m_resetWorkspace) {
@@ -138,10 +157,13 @@ void HapticsSim::updateWorkspace(cVector3d &pos)
 
     for (i=0; i<3; i++) {
         // Update workspace boundaries
-        if (pos(i) < m_workspace[0](i))
-            m_workspace[0](i) = pos(i);
-        if (pos(i) > m_workspace[1](i))
-            m_workspace[1](i) = pos(i);
+        if (m_learnWorkspace)
+        {
+            if (pos(i) < m_workspace[0](i))
+                m_workspace[0](i) = pos(i);
+            if (pos(i) > m_workspace[1](i))
+                m_workspace[1](i) = pos(i);
+        }
 
         float dif = (m_workspace[1](i) - m_workspace[0](i));
         if (dif != 0.0)
@@ -153,20 +175,27 @@ void HapticsSim::updateWorkspace(cVector3d &pos)
         // Normalize position to [-1, 1] within workspace.
         // Further scale by user-specified workspace scaling. (default=1)
         pos(i) = (pos(i) + m_workspaceOffset(i)) * m_workspaceScale(i) * m_scale(i);
+        vel(i) = vel(i) * m_workspaceScale(i) * m_scale(i);
     }
 }
 
 void HapticsSim::step()
 {
+    m_chaiWorld->computeGlobalPositions(true);
+
     cToolCursor *cursor = m_cursor->object();
     cursor->updateFromDevice();
 
     cVector3d pos = cursor->getDeviceGlobalPos();
-    updateWorkspace(pos);
+    cVector3d vel = cursor->getDeviceGlobalLinVel();
 
+    updateWorkspace(pos, vel);
     cursor->setDeviceGlobalPos(pos);
+    cursor->setDeviceGlobalLinVel(vel);
     pos.copyto(m_cursor->m_position);
-    cursor->getDeviceGlobalLinVel().copyto(m_cursor->m_velocity);
+    m_cursor->m_position.m_magnitude.m_value = pos.length();
+    vel.copyto(m_cursor->m_velocity);
+    m_cursor->m_velocity.m_magnitude.m_value = vel.length();
 
     if (m_pGrabbedObject) {
         cursor->setDeviceGlobalForce(0,0,0);
@@ -197,7 +226,19 @@ void HapticsSim::step()
         /* If in contact with an object, display the cursor at the
          * proxy location instead of the device location, so that it
          * does not show it penetrating the object. */
-        pos = cursor->m_hapticPoint->getGlobalPosProxy();
+        pos = cursor->m_image->getGlobalPos();
+
+        /* It appears that non-penetrating tool position is not
+         * correctly displayed for potential force algo used with
+         * shape primitives, since there is no "proxy".  Instead, we
+         * wills how the interaction point. Note that it also does not
+         * seem to take into account the haptic point radius. */
+        if (cursor->m_hapticPoint->getNumInteractionEvents() > 0)
+        {
+            const auto& inter = *cursor->m_hapticPoint->getInteractionEvent(0);
+            pos = inter.m_object->getGlobalPos() + cMul(inter.m_object->getGlobalRot(),
+                                                        inter.m_localSurfacePos);
+        }
 
         sendtotype(update_sim, true,
                    "/world/cursor/position","fff",
@@ -351,7 +392,11 @@ void OscSphereCHAI::on_grab()
 OscPrismCHAI::OscPrismCHAI(cWorld *world, const char *name, OscBase *parent)
     : OscPrism(NULL, name, parent)
 {
-    m_pPrism = new cShapeBox(m_size.x(), m_size.y(), m_size.z());
+    m_pPrism = new cMesh();
+    createPrism();
+    m_pPrism->computeBoundaryBox();
+    m_pPrism->m_material->setBlueLight();
+
     world->addChild(m_pPrism);
     m_pPrism->computeGlobalPositions();
 
@@ -359,6 +404,7 @@ OscPrismCHAI::OscPrismCHAI(cWorld *world, const char *name, OscBase *parent)
     // during object contact.
     m_pPrism->m_userData = this;
 
+    m_pPrism->createBruteForceCollisionDetector();
     m_pPrism->createEffectSurface();
     m_pPrism->m_material->setStiffness(g_maxStiffnessRatio
                                        * g_hapticDeviceInfo.m_maxLinearStiffness);
@@ -372,9 +418,162 @@ OscPrismCHAI::~OscPrismCHAI()
         m_pPrism->getParent()->deleteChild(m_pPrism);
 }
 
+// This function borrowed from dynamic_ode example in CHAI.
+void OscPrismCHAI::createPrism(bool openbox)
+{
+    int n;
+    int cur_index = 0;
+    int start_index = 0;
+
+    // +x face
+    m_pPrism->newVertex( m_size.x()/2,  m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex( m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex( m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    m_pPrism->newVertex( m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex( m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex( m_size.x()/2, -m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    for(n=start_index; n<cur_index; n++) {
+        m_pPrism->m_vertices->setTexCoord(n,
+            (m_pPrism->m_vertices->getLocalPos(n).y() + m_size.x()/2) / (2.0 * m_size.z()/2),
+            (m_pPrism->m_vertices->getLocalPos(n).z() + m_size.x()/2) / (2.0 * m_size.y()/2)
+            );
+        m_pPrism->m_vertices->setNormal(n,1,0,0);
+    }
+
+    start_index += 6;
+
+    // -x face
+    m_pPrism->newVertex(-m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2,  m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    m_pPrism->newVertex(-m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    for(n=start_index; n<cur_index; n++) {
+        m_pPrism->m_vertices->setTexCoord(n,
+            (m_pPrism->m_vertices->getLocalPos(n).y() + m_size.x()/2) / (2.0 * m_size.z()/2),
+            (m_pPrism->m_vertices->getLocalPos(n).z() + m_size.x()/2) / (2.0 * m_size.y()/2)
+            );
+        m_pPrism->m_vertices->setNormal(n,-1,0,0);
+    }
+
+    start_index += 6;
+
+    // +y face
+    m_pPrism->newVertex(m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex(m_size.x()/2,  m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    m_pPrism->newVertex(m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    for(n=start_index; n<cur_index; n++) {
+        m_pPrism->m_vertices->setTexCoord(n,
+            (m_pPrism->m_vertices->getLocalPos(n).x() + m_size.y()/2) / (2.0 * m_size.z()/2),
+            (m_pPrism->m_vertices->getLocalPos(n).z() + m_size.x()/2) / (2.0 * m_size.y()/2)
+            );
+        m_pPrism->m_vertices->setNormal(n,0,1,0);
+    }
+
+    start_index += 6;
+
+    // -y face
+    m_pPrism->newVertex(m_size.x()/2,  -m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(m_size.x()/2,  -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(m_size.x()/2,  -m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2,  m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    for(n=start_index; n<cur_index; n++) {
+        m_pPrism->m_vertices->setTexCoord(n,
+            (m_pPrism->m_vertices->getLocalPos(n).x() + m_size.y()/2) / (2.0 * m_size.z()/2),
+            (m_pPrism->m_vertices->getLocalPos(n).z() + m_size.x()/2) / (2.0 * m_size.y()/2)
+            );
+        m_pPrism->m_vertices->setNormal(n,0,-1,0);
+    }
+
+    start_index += 6;
+
+    // -z face
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(m_size.x()/2,   m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(m_size.x()/2,  -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    m_pPrism->newVertex( m_size.x()/2,  m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newVertex(-m_size.x()/2,  m_size.y()/2, -m_size.z()/2);
+    m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+    cur_index+=3;
+
+    for(n=start_index; n<cur_index; n++) {
+        m_pPrism->m_vertices->setTexCoord(n,
+            (m_pPrism->m_vertices->getLocalPos(n).x() + m_size.y()/2) / (2.0 * m_size.z()/2),
+            (m_pPrism->m_vertices->getLocalPos(n).y() + m_size.x()/2) / (2.0 * m_size.y()/2)
+            );
+        m_pPrism->m_vertices->setNormal(n,0,0,-1);
+    }
+
+    start_index += 6;
+
+    if (!openbox) {
+
+        // +z face
+        m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, m_size.z()/2);
+        m_pPrism->newVertex(m_size.x()/2,  -m_size.y()/2, m_size.z()/2);
+        m_pPrism->newVertex(m_size.x()/2,  m_size.y()/2,  m_size.z()/2);
+        m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+        cur_index+=3;
+
+        m_pPrism->newVertex(-m_size.x()/2, -m_size.y()/2, m_size.z()/2);
+        m_pPrism->newVertex( m_size.x()/2,  m_size.y()/2, m_size.z()/2);
+        m_pPrism->newVertex(-m_size.x()/2,  m_size.y()/2, m_size.z()/2);
+        m_pPrism->newTriangle(cur_index,cur_index+1,cur_index+2);
+        cur_index+=3;
+
+        for(n=start_index; n<cur_index; n++) {
+            m_pPrism->m_vertices->setTexCoord(n,
+                (m_pPrism->m_vertices->getLocalPos(n).x() + m_size.y()/2) / (2.0 * m_size.z()/2),
+                (m_pPrism->m_vertices->getLocalPos(n).y() + m_size.x()/2) / (2.0 * m_size.y()/2)
+                );
+            m_pPrism->m_vertices->setNormal(n,0,0,1);
+        }
+
+        start_index += 6;
+    }
+}
+
 void OscPrismCHAI::on_size()
 {
-    m_pPrism->setSize(m_size.x(), m_size.y(), m_size.z());
+    cVector3d curSize = m_pPrism->getBoundaryMax() - m_pPrism->getBoundaryMin();
+    cVector3d scale(1.0/curSize.x(), 1.0/curSize.y(), 1.0/curSize.z());
+    m_pPrism->scaleXYZ(scale.x()*m_size.x(),
+                       scale.y()*m_size.y(),
+                       scale.z()*m_size.z());
 }
 
 void OscPrismCHAI::on_grab()
@@ -409,7 +608,7 @@ OscMeshCHAI::OscMeshCHAI(cWorld *world, const char *name, const char *filename,
 
     // size it to 0.1 without changing proportions
     float size = (vmax-vmin).length();
-    m_size.setd(0.1/size, 0.1/size, 0.1/size);
+    m_size.setValue(0.1/size, 0.1/size, 0.1/size);
     on_size();
 
     /* setup collision detector */
@@ -422,7 +621,8 @@ OscMeshCHAI::OscMeshCHAI(cWorld *world, const char *name, const char *filename,
     // during object contact.
     m_pMesh->m_userData = this;
 
-    m_pMesh->createEffectSurface();
+    // We do not call createEffectSurface() for cMesh since
+    // finger-proxy algorithm is engaged.
     m_pMesh->m_material->setStiffness(g_maxStiffnessRatio
                                       * g_hapticDeviceInfo.m_maxLinearStiffness);
 
@@ -459,35 +659,49 @@ OscCursorCHAI::OscCursorCHAI(cWorld *world, const char *name, OscBase *parent)
     // get handle to first available haptic device on the list
     cGenericHapticDevicePtr device;
 
-    if (handler->getDevice(device, 0) && device->open()) {
-        m_bInitialized = true;
-    } else {
-        m_bInitialized = false;
+    m_bInitialized = false;
+    m_pCursor = nullptr;
+    if (handler->getDevice(device, 0))
+        initializeWithDevice(world, device);
+
+    if (!m_bInitialized)
         printf("[%s] Could not initialize.\n", simulation()->type_str());
+}
+
+void OscCursorCHAI::initializeWithDevice(cWorld *world, cGenericHapticDevicePtr device)
+{
+    if (!device->open())
+    {
+        m_bInitialized = false;
+        return;
     }
+
+    m_bInitialized = true;
 
     device->calibrate();
 
     // create the cursor object
+    if (m_pCursor) {
+        world->removeChild(m_pCursor);
+        delete m_pCursor;
+    }
     m_pCursor = new cToolCursor(world);
 
-    if (m_bInitialized)
-    {
-        m_pCursor->setHapticDevice(device);
-        world->addChild(m_pCursor);
+    m_pCursor->setHapticDevice(device);
+    world->addChild(m_pCursor);
 
-        printf("[%s] Using %s device.\n",
-               simulation()->type_str(), device_str());
+    printf("[%s] Using %s device.\n",
+           simulation()->type_str(), device_str());
 
-        // TODO: right way to pass this around
-        g_hapticDeviceInfo = device->getSpecifications();
+    // TODO: right way to pass this around
+    g_hapticDeviceInfo = device->getSpecifications();
 
     // User data points to the OscObject, used for identification
     // during object contact.
     m_pCursor->m_userData = this;
 
     m_pCursor->setWorkspaceRadius(1.0);
-    m_pCursor->setRadius(0.1);
+    m_pCursor->setRadius(0.01);
 
     m_pCursor->setWaitForSmallForce(true);
 
@@ -501,10 +715,9 @@ OscCursorCHAI::OscCursorCHAI(cWorld *world, const char *name, OscBase *parent)
 
     // this is necessary for the above rotation to take effect
     m_pCursor->computeGlobalPositions();
-    }
 
     // set up mass as zero to begin (transparent proxy)
-    m_mass.set(0);
+    m_mass.setValue(0);
 
     // no extra force to begin with
     m_nExtraForceSteps = 0;
@@ -595,4 +808,30 @@ void OscCursorCHAI::addCursorExtraForce()
         m_pCursor->addDeviceGlobalForce(m_extraForce);
         m_nExtraForceSteps--;
     }
+}
+
+OscHapticsVirtdevCHAI::OscHapticsVirtdevCHAI(cWorld *world, const char *name, OscBase *parent)
+    : OscSphereCHAI(world, name, parent)
+{
+    m_pVirtdev = std::make_shared<cVirtualDevice>();
+    m_position.setSetCallback(OscHapticsVirtdevCHAI::on_set_position, this);
+}
+
+OscHapticsVirtdevCHAI::~OscHapticsVirtdevCHAI()
+{
+}
+
+void OscHapticsVirtdevCHAI::on_set_position(void* _me, OscVector3 &p)
+{
+    OscHapticsVirtdevCHAI *me = static_cast<OscHapticsVirtdevCHAI*>(_me);
+
+    // Rotate virtual device position to match cursor.
+    HapticsSim *sim = static_cast<HapticsSim*>(me->simulation());
+    cMatrix3d rot(sim->m_cursor->object()->getLocalRot());
+    me->m_pVirtdev->setPosition(cMul(cInverse(rot), p));
+
+    // Update visual representation of virtual device
+    // TODO: should be able to throttle this but it leads to stuttering visual updates
+    me->simulation()->sendtotype(Simulation::ST_VISUAL, false, "/world/device/position", "fff",
+                                 me->m_position.x(), me->m_position.y(), me->m_position.z());
 }

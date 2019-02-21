@@ -141,6 +141,10 @@ class OscCamera : public OscBase
   public:
 	OscCamera(const char *name, OscBase *parent=NULL);
 
+    OscVector3& getPosition() { return m_position; }
+    OscVector3& getLookat() { return m_lookat; }
+    OscVector3& getUp() { return m_up; }
+
   protected:
     OSCVECTOR3(OscCamera, position) {};
     OSCVECTOR3(OscCamera, lookat) {};
@@ -161,7 +165,7 @@ public:
     OSCSCALAR(OscResponse, offset) {};
 
     OSCMETHOD2(OscResponse, spring)
-        { m_stiffness.set(arg1); m_damping.set(arg2); }
+        { m_stiffness.setValue(arg1); m_damping.setValue(arg2); }
 };
 
 //! This class is used to override behaviour of OscConstraint's values

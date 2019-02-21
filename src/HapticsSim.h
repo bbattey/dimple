@@ -13,8 +13,10 @@
 #include <world/CShapeBox.h>
 #include <world/CMultiMesh.h>
 #include <tools/CToolCursor.h>
+#include <devices/CGenericHapticDevice.h>
 
 class OscCursorCHAI;
+class OscHapticsVirtdevCHAI;
 
 class HapticsSim : public Simulation
 {
@@ -36,7 +38,7 @@ class HapticsSim : public Simulation
     virtual void step();
 
     void findContactObject();
-    void updateWorkspace(cVector3d &pos);
+    void updateWorkspace(cVector3d &pos, cVector3d &vel);
 
     OscObject *m_pContactObject;
     cVector3d m_lastContactPoint;
@@ -46,12 +48,16 @@ class HapticsSim : public Simulation
     cVector3d m_workspaceScale;
     cVector3d m_workspaceOffset;
     bool m_resetWorkspace;
+    bool m_learnWorkspace;
 
     //! A step counter
     int m_counter;
 
     cWorld* m_chaiWorld;            //! the world in which we will create our environment
     OscCursorCHAI* m_cursor;    //! An OscObject representing the 3D cursor.
+    OscHapticsVirtdevCHAI* m_pVirtdev;
+
+    friend OscHapticsVirtdevCHAI;
 };
 
 class HapticsPrismFactory : public PrismFactory
@@ -152,7 +158,7 @@ public:
     OscPrismCHAI(cWorld *world, const char *name, OscBase *parent=NULL);
     virtual ~OscPrismCHAI();
 
-    virtual cShapeBox *object() { return m_pPrism; }
+    virtual cMesh *object() { return m_pPrism; }
 
 protected:
     virtual void on_size();
@@ -165,7 +171,10 @@ protected:
         { object()->m_material->setDynamicFriction(m_friction_dynamic.m_value); }
     virtual void on_grab();
 
-    cShapeBox *m_pPrism;
+    //! Create a cMesh with a prism structure.
+    void createPrism(bool openbox=false);
+
+    cMesh *m_pPrism;
 };
 
 class OscMeshCHAI : public OscMesh
@@ -198,6 +207,7 @@ public:
     virtual cToolCursor *object() { return m_pCursor; }
 
     bool is_initialized() { return m_bInitialized; }
+    void initializeWithDevice(cWorld *world, cGenericHapticDevicePtr device);
 
     int start() { return m_pCursor->start(); }
     int stop()  { return m_pCursor->stop(); }
@@ -222,6 +232,43 @@ protected:
 
     cVector3d m_extraForce;
     bool m_bInitialized;
+};
+
+class cVirtualDevice : public chai3d::cGenericHapticDevice
+{
+public:
+    cVirtualDevice() {
+        memset(&m_specifications, 0, sizeof(m_specifications));
+        m_specifications.m_modelName = "virtual";
+        m_specifications.m_workspaceRadius = 1.0;
+        m_specifications.m_maxLinearStiffness = 1.0;
+    }
+    void setPosition(const cVector3d& pos) {
+        m_pos = pos;
+    }
+    virtual bool getPosition(cVector3d& pos) {
+        estimateLinearVelocity(pos=m_pos);
+        return C_SUCCESS;
+    }
+    virtual bool open()  { m_deviceReady = true; return C_SUCCESS; }
+    virtual bool close() { return C_SUCCESS; }
+protected:
+    cVector3d m_pos;
+};
+typedef std::shared_ptr<cVirtualDevice> cVirtualDevicePtr;
+
+class OscHapticsVirtdevCHAI : public OscSphereCHAI
+{
+public:
+    OscHapticsVirtdevCHAI(cWorld *world, const char *name, OscBase *parent=NULL);
+    virtual ~OscHapticsVirtdevCHAI();
+
+    cVirtualDevicePtr object() { return m_pVirtdev; }
+
+    static void on_set_position(void* me, OscVector3 &p);
+
+protected:
+    cVirtualDevicePtr m_pVirtdev;
 };
 
 #endif // _HAPTICS_SIM_H_

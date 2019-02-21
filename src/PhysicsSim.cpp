@@ -13,7 +13,7 @@ bool PhysicsPrismFactory::create(const char *name, float x, float y, float z)
     if (!(obj && simulation()->add_object(*obj)))
             return false;
 
-    obj->m_position.setd(x, y, z);
+    obj->m_position.setValue(x, y, z);
 
     return true;
 }
@@ -27,7 +27,7 @@ bool PhysicsSphereFactory::create(const char *name, float x, float y, float z)
     if (!(obj && simulation()->add_object(*obj)))
             return false;
 
-    obj->m_position.setd(x, y, z);
+    obj->m_position.setValue(x, y, z);
 
     return true;
 }
@@ -346,11 +346,14 @@ void ODEObject::update()
     OscObject *o = object();
     if (!o) return;
 
-    cVector3d pos(getPosition());
-    cVector3d vel(o->m_position - pos);
-    (o->m_velocity - vel).copyto(o->m_accel);
-    vel.copyto(o->m_velocity);
-    pos.copyto(o->m_position);
+    cVector3d vel(o->m_velocity);
+    float t = object()->simulation()->timestep();
+
+    // Set position & velocity
+    // (without feeding back effect to the simulation)
+    o->m_position.setValue(getPosition(), false);
+    o->m_velocity.setValue(getVelocity(), false);
+    o->m_accel.setValue((vel - o->m_velocity) / t, false);
 }
 
 void ODEObject::on_set_rotation(void *me, OscMatrix3 &r)
@@ -460,7 +463,7 @@ OscSphereODE::OscSphereODE(dWorldID odeWorld, dSpaceID odeSpace, const char *nam
     dGeomID odeGeom = dCreateSphere(odeSpace, m_radius.m_value);
 
     m_pSpecial = new ODEObject(this, odeGeom, odeWorld, odeSpace);
-    m_density.set(m_density.m_value);
+    m_density.setValue(m_density.m_value);
 }
 
 void OscSphereODE::on_radius()
@@ -506,7 +509,7 @@ OscPrismODE::OscPrismODE(dWorldID odeWorld, dSpaceID odeSpace, const char *name,
     dGeomID odeGeom = dCreateBox(odeSpace, m_size.x(), m_size.y(), m_size.z());
 
     m_pSpecial = new ODEObject(this, odeGeom, odeWorld, odeSpace);
-    m_density.set(m_density.m_value);
+    m_density.setValue(m_density.m_value);
 }
 
 void OscPrismODE::on_size()
