@@ -192,10 +192,10 @@ void HapticsSim::step()
     updateWorkspace(pos, vel);
     cursor->setDeviceGlobalPos(pos);
     cursor->setDeviceGlobalLinVel(vel);
-    pos.copyto(m_cursor->m_position);
-    m_cursor->m_position.m_magnitude.m_value = pos.length();
-    vel.copyto(m_cursor->m_velocity);
-    m_cursor->m_velocity.m_magnitude.m_value = vel.length();
+
+    // Set values without feeding back changes to CHAI
+    m_cursor->m_position.setValue(pos, false);
+    m_cursor->m_velocity.setValue(vel, false);
 
     if (m_pGrabbedObject) {
         cursor->setDeviceGlobalForce(0,0,0);
@@ -212,6 +212,9 @@ void HapticsSim::step()
     }
 
     m_cursor->addCursorExtraForce();
+
+    // Set force value without feeding back changes to CHAI
+    m_cursor->m_force.setValue(cursor->getDeviceGlobalForce(), false);
 
     cursor->applyToDevice();
 
@@ -299,9 +302,7 @@ void HapticsSim::findContactObject()
 
 void HapticsSim::set_grabbed(OscObject *pGrabbed)
 {
-    Simulation::set_grabbed(pGrabbed);
-
-    CHAIObject *ob;
+    CHAIObject *ob = NULL;
 
     // return previous object to normal state
     if (m_pGrabbedObject) {
@@ -309,9 +310,10 @@ void HapticsSim::set_grabbed(OscObject *pGrabbed)
         if (ob) ob->chai_object()->setHapticEnabled(true, true);
     }
 
-    m_pGrabbedObject = pGrabbed;
+    Simulation::set_grabbed(pGrabbed);
 
     // remove new object from haptic contact
+    ob = NULL;
     if (m_pGrabbedObject) {
         ob = dynamic_cast<CHAIObject*>(m_pGrabbedObject->special());
         if (ob) ob->chai_object()->setHapticEnabled(false, true);
