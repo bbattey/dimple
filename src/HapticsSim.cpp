@@ -6,10 +6,7 @@
 #include "devices/CHapticDeviceHandler.h"
 #include "tools/CToolCursor.h"
 #include <memory>
-
-// TODO: right way to pass this around
-cHapticDeviceInfo g_hapticDeviceInfo;
-float g_maxStiffnessRatio = 0.1;
+#include <algorithm>
 
 bool HapticsPrismFactory::create(const char *name, float x, float y, float z)
 {
@@ -66,7 +63,8 @@ bool HapticsMeshFactory::create(const char *name, const char *filename,
 /****** HapticsSim ******/
 
 HapticsSim::HapticsSim(const char *port)
-    : Simulation(port, ST_HAPTICS)
+    : Simulation(port, ST_HAPTICS),
+      m_workspaceScale(1,1,1)
 {
     m_pPrismFactory = new HapticsPrismFactory(this);
     m_pSphereFactory = new HapticsSphereFactory(this);
@@ -109,9 +107,6 @@ void HapticsSim::initialize()
     // create a virtual device if a real device could not be initialized.
     if (!m_cursor->is_initialized())
     {
-        // turn off workspace scaling
-        m_learnWorkspace = false;
-
         // Create a virtual device named "device"
         simulation()->sendtotype(Simulation::ST_VISUAL, false,
                                  "/world/virtdev/create","sfff",
@@ -122,6 +117,11 @@ void HapticsSim::initialize()
 
         // Create a local object to accept messages from the virtual device
         m_pVirtdev = new OscHapticsVirtdevCHAI(m_chaiWorld, "device", this);
+
+        // turn off workspace scale learning and set scaling to
+        // virtual device scale
+        m_learnWorkspace = false;
+        m_resetWorkspace = false;
 
         // Hook it up to the cursor
         m_cursor->initializeWithDevice(m_chaiWorld, m_pVirtdev->object());
@@ -154,32 +154,40 @@ void HapticsSim::updateWorkspace(cVector3d &pos, cVector3d &vel)
 {
     int i;
     if (m_resetWorkspace) {
-        m_workspace[0] = pos;
-        m_workspace[1] = pos;
+        m_workspace[0] = pos - cVector3d(1e-4,1e-4,1e-4);
+        m_workspace[1] = pos + cVector3d(1e-4,1e-4,1e-4);
         m_resetWorkspace = false;
     }
 
+    bool changed = false;
     for (i=0; i<3; i++) {
         // Update workspace boundaries
         if (m_learnWorkspace)
         {
-            if (pos(i) < m_workspace[0](i))
+            if (pos(i) < m_workspace[0](i)) {
                 m_workspace[0](i) = pos(i);
-            if (pos(i) > m_workspace[1](i))
+                changed = true;
+            }
+            if (pos(i) > m_workspace[1](i)) {
                 m_workspace[1](i) = pos(i);
+                changed = true;
+            }
         }
 
         float dif = (m_workspace[1](i) - m_workspace[0](i));
-        if (dif != 0.0)
+        if (dif != 0.0 && changed)
+        {
             m_workspaceScale(i) = 2.0/(m_workspace[1](i) - m_workspace[0](i));
-        else
-            m_workspaceScale(i) = 1;
-        m_workspaceOffset(i) = -(m_workspace[1](i) + m_workspace[0](i)) / 2.0;
+            m_workspaceOffset(i) = -(m_workspace[1](i) + m_workspace[0](i)) / 2.0;
+        }
 
         // Normalize position to [-1, 1] within workspace.
         // Further scale by user-specified workspace scaling. (default=1)
-        pos(i) = (pos(i) + m_workspaceOffset(i)) * m_workspaceScale(i) * m_scale(i);
-        vel(i) = vel(i) * m_workspaceScale(i) * m_scale(i);
+        pos(i) = (pos(i) + m_workspaceOffset(i))
+            * m_workspaceScale(i) * m_scale(i)
+            / m_cursor->object()->getWorkspaceScaleFactor();
+        vel(i) = vel(i) * m_workspaceScale(i) * m_scale(i)
+            / m_cursor->object()->getWorkspaceScaleFactor();
     }
 }
 
@@ -211,7 +219,9 @@ void HapticsSim::step()
 
         // Compensate for workspace scaling
         cVector3d force = cursor->getDeviceGlobalForce();
-        force = force * (m_workspaceScale * m_scale);
+        force = force
+            / (m_workspaceScale * m_scale)
+            * m_cursor->object()->getWorkspaceScaleFactor();
         cursor->setDeviceGlobalForce(force);
 
         m_cursor->addCursorMassForce();
@@ -241,7 +251,7 @@ void HapticsSim::step()
         /* It appears that non-penetrating tool position is not
          * correctly displayed for potential force algo used with
          * shape primitives, since there is no "proxy".  Instead, we
-         * wills how the interaction point. Note that it also does not
+         * will show the interaction point. Note that it also does not
          * seem to take into account the haptic point radius. */
         if (cursor->m_hapticPoint->getNumInteractionEvents() > 0)
         {
@@ -332,6 +342,11 @@ void HapticsSim::set_grabbed(OscObject *pGrabbed)
                ob ? 0 : 1);
 }
 
+const cHapticDeviceInfo& HapticsSim::getSpecs()
+{
+    return m_cursor->getSpecs();
+}
+
 /****** CHAIObject ******/
 
 CHAIObject::CHAIObject(OscObject *obj, cGenericObject *chai_obj, cWorld *world)
@@ -345,10 +360,26 @@ CHAIObject::CHAIObject(OscObject *obj, cGenericObject *chai_obj, cWorld *world)
     obj->m_position.setSetCallback(CHAIObject::on_set_position, this);
     obj->m_rotation.setSetCallback(CHAIObject::on_set_rotation, this);
     obj->m_visible.setSetCallback(CHAIObject::on_set_visible, this);
+    obj->m_stiffness.setSetCallback(CHAIObject::on_set_stiffness, this);
 }
 
 CHAIObject::~CHAIObject()
 {
+}
+
+void CHAIObject::on_set_stiffness(void* _me, OscScalar &s)
+{
+    CHAIObject* me = static_cast<CHAIObject*>(_me);
+    HapticsSim* hap = dynamic_cast<HapticsSim*>(me->m_object->simulation());
+    if (!hap) return;
+
+    // TODO: update all object materials when world stiffness changes
+    me->m_chai_object->m_material->setStiffness(
+        std::min(s.m_value,
+                 std::min(hap->m_stiffness.m_value,
+                          hap->getSpecs().m_maxLinearStiffness)));
+    me->m_object->m_stiffness.setValue(
+        me->m_chai_object->m_material->getStiffness(), false);
 }
 
 /****** OscSphereCHAI ******/
@@ -368,8 +399,14 @@ OscSphereCHAI::OscSphereCHAI(cWorld *world, const char *name, OscBase *parent)
     // How to replace in Chai3d 3.2?
 
     m_pSphere->createEffectSurface();
-    m_pSphere->m_material->setStiffness(g_maxStiffnessRatio
-                                        * g_hapticDeviceInfo.m_maxLinearStiffness);
+
+    HapticsSim *hap = dynamic_cast<HapticsSim*>(simulation());
+    if (hap)
+    {
+        m_pSphere->m_material->setStiffness(
+            std::min(hap->m_stiffness.m_value,
+                     hap->getSpecs().m_maxLinearStiffness));
+    }
 
     m_pSpecial = new CHAIObject(this, m_pSphere, world);
 }
@@ -411,10 +448,21 @@ OscPrismCHAI::OscPrismCHAI(cWorld *world, const char *name, OscBase *parent)
     // during object contact.
     m_pPrism->m_userData = this;
 
+    // We use two force algorithms because the finger proxy algorithm
+    // handles better near corners, but potential field recovers
+    // better from pop-through issues.
     m_pPrism->createBruteForceCollisionDetector();
     m_pPrism->createEffectSurface();
-    m_pPrism->m_material->setStiffness(g_maxStiffnessRatio
-                                       * g_hapticDeviceInfo.m_maxLinearStiffness);
+
+    // We divide the stiffness by 2 because there are two force
+    // algorithms engaged which are additive.
+    HapticsSim *hap = dynamic_cast<HapticsSim*>(simulation());
+    if (hap)
+    {
+        m_pPrism->m_material->setStiffness(
+            std::min(hap->m_stiffness.m_value,
+                     hap->getSpecs().m_maxLinearStiffness));
+    }
 
     m_pSpecial = new CHAIObject(this, m_pPrism, world);
 }
@@ -629,8 +677,13 @@ OscMeshCHAI::OscMeshCHAI(cWorld *world, const char *name, const char *filename,
 
     // We do not call createEffectSurface() for cMesh since
     // finger-proxy algorithm is engaged.
-    m_pMesh->m_material->setStiffness(g_maxStiffnessRatio
-                                      * g_hapticDeviceInfo.m_maxLinearStiffness);
+    HapticsSim *hap = dynamic_cast<HapticsSim*>(simulation());
+    if (hap)
+    {
+        m_pMesh->m_material->setStiffness(
+            std::min(hap->m_stiffness.m_value,
+                     hap->getSpecs().m_maxLinearStiffness));
+    }
 
     m_pSpecial = new CHAIObject(this, m_pMesh, world);
 }
@@ -694,13 +747,11 @@ void OscCursorCHAI::initializeWithDevice(cWorld *world, cGenericHapticDevicePtr 
     m_pCursor = new cToolCursor(world);
 
     m_pCursor->setHapticDevice(device);
+    m_specs = device->getSpecifications();
     world->addChild(m_pCursor);
 
     printf("[%s] Using %s device.\n",
            simulation()->type_str(), device_str());
-
-    // TODO: right way to pass this around
-    g_hapticDeviceInfo = device->getSpecifications();
 
     // User data points to the OscObject, used for identification
     // during object contact.

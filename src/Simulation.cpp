@@ -594,7 +594,8 @@ Simulation::Simulation(const char *port, int type)
     : OscBase("world", NULL, lo_server_new(port, NULL)),
       m_collide("collide", this),
       m_gravity("gravity", this),
-      m_scale("scale", this)
+      m_scale("scale", this),
+      m_stiffness("stiffness", this)
 {
     m_addr = lo_address_new("localhost", port);
     m_type = type;
@@ -608,6 +609,9 @@ Simulation::Simulation(const char *port, int type)
     m_scale.setSetCallback(set_scale, this);
 
     m_scale.setValue(1,1,1);
+
+    // No world max-stiffness enforced by default (very high value)
+    m_stiffness.setValue(10000);
 }
 
 Simulation::~Simulation()
