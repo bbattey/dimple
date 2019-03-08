@@ -233,11 +233,6 @@ void HapticsSim::step()
 
     m_counter++;
 
-    int update_sim = Simulation::ST_VISUAL;
-    if (m_pGrabbedObject)
-        update_sim |= Simulation::ST_PHYSICS;
-
-    if (update_sim)
     {
         /* If in contact with an object, display the cursor at the
          * proxy location instead of the device location, so that it
@@ -256,7 +251,15 @@ void HapticsSim::step()
                                                         inter.m_localSurfacePos);
         }
 
-        sendtotype(update_sim, true,
+        sendtotype(Simulation::ST_VISUAL, true,
+                   "/world/cursor/position","fff",
+                   pos.x(), pos.y(), pos.z());
+    }
+
+    if (m_pGrabbedObject)
+    {
+        pos = cursor->getDeviceGlobalPos();
+        sendtotype(Simulation::ST_PHYSICS, true,
                    "/world/cursor/position","fff",
                    pos.x(), pos.y(), pos.z());
     }
@@ -859,8 +862,9 @@ void OscCursorCHAI::addCursorMassForce()
 void OscCursorCHAI::addCursorGrabbedForce(OscObject *pGrabbed)
 {
     cVector3d f(m_position - pGrabbed->m_position);
-    f.mul(-10);
-    f.add(m_velocity * (-0.001));
+
+    f.mul(-fabs(simulation()->m_grab_stiffness.m_value) * fabs(simulation()->m_grab_feedback.m_value));
+    f.add(m_velocity * (-fabs(simulation()->m_grab_damping.m_value)));
     m_pCursor->addDeviceGlobalForce(f);
 }
 
