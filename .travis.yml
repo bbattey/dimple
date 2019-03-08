@@ -25,6 +25,7 @@ matrix:
           - libxcursor-dev
           - libxrandr-dev
           - libxinerama-dev
+          - quilt
     env: HOST="" MATRIX_EVAL="CC=gcc-8 && CXX=g++-8"
     compiler: gcc
   - os: osx
