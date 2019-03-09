@@ -33,7 +33,11 @@ class HapticsSim : public Simulation
     //! Set the grabbed object or ungrab by setting to NULL.
     virtual void set_grabbed(OscObject *pGrabbed);
 
-    virtual void on_reset_workspace() { m_resetWorkspace = true; }
+    virtual void on_workspace_size();
+    virtual void on_workspace_center();
+    virtual void on_workspace_learn();
+    virtual void on_workspace_freeze();
+    virtual void on_workspace_standard();
 
     bool m_forceEnabled;
 
@@ -133,6 +137,7 @@ protected:
     static void on_set_friction_dynamic(void* me, OscScalar &mud)
         { ((CHAIObject*)me)->chai_object()->
                 m_material->setDynamicFriction(mud.m_value); }
+    static void on_set_texture_image(void* me, OscString &s);
 };
 
 class OscSphereCHAI : public OscSphere
@@ -247,7 +252,7 @@ public:
     cVirtualDevice() {
         memset(&m_specifications, 0, sizeof(m_specifications));
         m_specifications.m_modelName = "virtual";
-        m_specifications.m_workspaceRadius = 0.4;
+        m_specifications.m_workspaceRadius = 1.0;
         m_specifications.m_maxLinearStiffness = 1000.0;
     }
     void setPosition(const cVector3d& pos) {

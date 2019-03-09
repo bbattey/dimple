@@ -70,6 +70,9 @@ HapticsSim::HapticsSim(const char *port)
     m_pSphereFactory = new HapticsSphereFactory(this);
     m_pMeshFactory = new HapticsMeshFactory(this);
 
+    m_workspace_size.setValue(2,2,2);
+    m_workspace_center.setValue(0,0,0);
+
     m_fTimestep = haptics_timestep_ms/1000.0;
     printf("CHAI timestep: %f\n", m_fTimestep);
 }
@@ -186,6 +189,12 @@ void HapticsSim::updateWorkspace(cVector3d &pos, cVector3d &vel)
         pos(i) = (pos(i) + m_workspaceOffset(i)*0)
             * m_workspaceScale(i) * m_scale(i);
         vel(i) = vel(i) * m_workspaceScale(i) * m_scale(i);
+    }
+
+    if (changed)
+    {
+        m_workspace_size.setValue(m_workspace[1] - m_workspace[0], false);
+        m_workspace_center.setValue((m_workspace[1] + m_workspace[0])/2, false);
     }
 }
 
@@ -311,6 +320,10 @@ void HapticsSim::findContactObject()
         obj = interactionEvent->m_object;
     }
 
+    // Check parents if no user data present
+    while (obj && !obj->m_userData)
+        obj = obj->getParent();
+
     // User data is set in the Osc*CHAI constructors
     if (obj)
         m_pContactObject = (OscObject*)obj->m_userData;
@@ -352,6 +365,38 @@ void HapticsSim::clear_contact_object(CHAIObject *pCHAIObject)
     m_cursor->object()->m_hapticPoint->clearFromContact(pCHAIObject->chai_object());
 }
 
+void HapticsSim::on_workspace_size()
+{
+    cVector3d center = (m_workspace[1] + m_workspace[0])/2;
+    m_workspace[0] = center - m_workspace_size/2;
+    m_workspace[1] = center + m_workspace_size/2;
+}
+
+void HapticsSim::on_workspace_center()
+{
+    cVector3d size = (m_workspace[1] - m_workspace[0]);
+    m_workspace[0] = m_workspace_center - size/2;
+    m_workspace[1] = m_workspace_center + size/2;
+}
+
+void HapticsSim::on_workspace_learn()
+{
+    m_resetWorkspace = true;
+    m_learnWorkspace = true;
+}
+
+void HapticsSim::on_workspace_freeze()
+{
+    m_learnWorkspace = false;
+}
+
+void HapticsSim::on_workspace_standard()
+{
+    m_learnWorkspace = false;
+    m_workspace_size.setValue(2,2,2);
+    m_workspace_center.setValue(0,0,0);
+}
+
 /****** CHAIObject ******/
 
 CHAIObject::CHAIObject(OscObject *obj, cGenericObject *chai_obj, cWorld *world)
@@ -366,6 +411,7 @@ CHAIObject::CHAIObject(OscObject *obj, cGenericObject *chai_obj, cWorld *world)
     obj->m_rotation.setSetCallback(CHAIObject::on_set_rotation, this);
     obj->m_visible.setSetCallback(CHAIObject::on_set_visible, this);
     obj->m_stiffness.setSetCallback(CHAIObject::on_set_stiffness, this);
+    obj->m_texture_image.setSetCallback(CHAIObject::on_set_texture_image, this);
 }
 
 CHAIObject::~CHAIObject()
@@ -385,6 +431,22 @@ void CHAIObject::on_set_stiffness(void* _me, OscScalar &s)
                           hap->getSpecs().m_maxLinearStiffness)));
     me->m_object->m_stiffness.setValue(
         me->m_chai_object->m_material->getStiffness(), false);
+}
+
+void CHAIObject::on_set_texture_image(void* _me, OscString &s)
+{
+    CHAIObject* me = static_cast<CHAIObject*>(_me);
+    me->m_chai_object->m_texture = cTexture2d::create();
+    if (!me->m_chai_object->m_texture->loadFromFile(s))
+    {
+        printf("[%s] Error loading texture image \"%s\".\n",
+               me->m_object->simulation()->type_str(), s.c_str());
+        return;
+    }
+
+    // enable texture mapping
+    me->m_chai_object->setUseTexture(true);
+    me->m_chai_object->m_material->setTextureLevel(1.0); // TODO expose this
 }
 
 /****** OscSphereCHAI ******/
@@ -880,6 +942,7 @@ void OscCursorCHAI::addCursorExtraForce()
 OscHapticsVirtdevCHAI::OscHapticsVirtdevCHAI(cWorld *world, const char *name, OscBase *parent)
     : OscSphereCHAI(world, name, parent)
 {
+    world->removeChild(m_pSphere);
     m_pVirtdev = std::make_shared<cVirtualDevice>();
     m_position.setSetCallback(OscHapticsVirtdevCHAI::on_set_position, this);
 }

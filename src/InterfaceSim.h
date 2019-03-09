@@ -50,7 +50,7 @@
 #define FWD_OSCSTRING(o,t)                                              \
     virtual void on_##o() {                                             \
         simulation()->send(0,m_##o.c_path(), "s",                       \
-                           m_##o.m_value); }                            \
+                           m_##o.c_str()); }                            \
     static void on_get_##o(void *me, OscString &o, int interval){       \
         ((OscBase*)me)->simulation()->sendtotype(t,0,                   \
                                         (o.path()+"/get").c_str(),      \
@@ -87,7 +87,25 @@ class InterfaceSim : public Simulation
         Simulation::on_drop();
     }
 
+    virtual void on_workspace_learn() {
+        send(0, "/world/workspace/learn", "");
+        Simulation::on_workspace_learn();
+    }
+
+    virtual void on_workspace_freeze() {
+        send(0, "/world/workspace/freeze", "");
+        Simulation::on_workspace_freeze();
+    }
+
+    virtual void on_workspace_standard() {
+        send(0, "/world/workspace/standard", "");
+        Simulation::on_workspace_standard();
+    }
+
     virtual void on_add_receiver(const char *type);
+
+    FWD_OSCVECTOR3(workspace_size, Simulation::ST_HAPTICS);
+    FWD_OSCVECTOR3(workspace_center, Simulation::ST_HAPTICS);
 
     FWD_OSCVECTOR3(scale, Simulation::ST_HAPTICS);
     FWD_OSCSCALAR(stiffness, Simulation::ST_HAPTICS);
@@ -262,6 +280,7 @@ public:
             m_friction_dynamic.setGetCallback(on_get_friction_dynamic, this);
             m_visible.setGetCallback(on_get_visible, this);
             m_stiffness.setGetCallback(on_get_stiffness, this);
+            m_texture_image.setGetCallback(on_get_texture_image, this);
 
             // TODO: also forward set handlers for magnitudes
 
@@ -302,6 +321,7 @@ protected:
     FWD_OSCSCALAR(collide,Simulation::ST_PHYSICS);
     FWD_OSCBOOLEAN(visible,Simulation::ST_VISUAL);
     FWD_OSCSCALAR(stiffness,Simulation::ST_HAPTICS);
+    FWD_OSCSTRING(texture_image,Simulation::ST_HAPTICS);
 };
 
 class OscPrismInterface : public OscPrism
@@ -322,6 +342,7 @@ public:
             m_friction_dynamic.setGetCallback(on_get_friction_dynamic, this);
             m_visible.setGetCallback(on_get_visible, this);
             m_stiffness.setGetCallback(on_get_stiffness, this);
+            m_texture_image.setGetCallback(on_get_texture_image, this);
 
             m_position.m_magnitude.setGetCallback(on_get_position_mag, this);
             m_velocity.m_magnitude.setGetCallback(on_get_velocity_mag, this);
@@ -360,6 +381,7 @@ protected:
     FWD_OSCSCALAR(collide,Simulation::ST_PHYSICS);
     FWD_OSCBOOLEAN(visible,Simulation::ST_VISUAL);
     FWD_OSCSCALAR(stiffness,Simulation::ST_HAPTICS);
+    FWD_OSCSTRING(texture_image,Simulation::ST_HAPTICS);
 };
 
 class OscMeshInterface : public OscMesh
@@ -373,12 +395,15 @@ public:
             m_velocity.setGetCallback(on_get_velocity, this);
             m_accel.setGetCallback(on_get_accel, this);
             m_color.setGetCallback(on_get_color, this);
-            m_friction_static.setGetCallback(on_get_friction_static, this);
-            m_friction_dynamic.setGetCallback(on_get_friction_dynamic, this);
             m_force.setGetCallback(on_get_force, this);
             m_size.setGetCallback(on_get_size, this);
+            m_mass.setGetCallback(on_get_mass, this);
+            m_density.setGetCallback(on_get_density, this);
+            m_friction_static.setGetCallback(on_get_friction_static, this);
+            m_friction_dynamic.setGetCallback(on_get_friction_dynamic, this);
             m_visible.setGetCallback(on_get_visible, this);
             m_stiffness.setGetCallback(on_get_stiffness, this);
+            m_texture_image.setGetCallback(on_get_texture_image, this);
 
             m_position.m_magnitude.setGetCallback(on_get_position_mag, this);
             m_velocity.m_magnitude.setGetCallback(on_get_velocity_mag, this);
@@ -411,11 +436,13 @@ protected:
     FWD_OSCVECTOR3(force,Simulation::ST_PHYSICS);
     FWD_OSCVECTOR3(size,Simulation::ST_PHYSICS);
     FWD_OSCSCALAR(mass,Simulation::ST_PHYSICS);
+    FWD_OSCSCALAR(density,Simulation::ST_PHYSICS);
     FWD_OSCSCALAR(friction_dynamic,Simulation::ST_HAPTICS);
     FWD_OSCSCALAR(friction_static,Simulation::ST_HAPTICS);
     FWD_OSCSCALAR(collide,Simulation::ST_PHYSICS);
     FWD_OSCBOOLEAN(visible,Simulation::ST_VISUAL);
     FWD_OSCSCALAR(stiffness,Simulation::ST_HAPTICS);
+    FWD_OSCSTRING(texture_image,Simulation::ST_HAPTICS);
 };
 
 class OscCameraInterface : public OscCamera
