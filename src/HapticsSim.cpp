@@ -187,8 +187,8 @@ void HapticsSim::updateWorkspace(cVector3d &pos, cVector3d &vel)
         // Normalize position to [-1, 1] within workspace.
         // Further scale by user-specified workspace scaling. (default=1)
         pos(i) = (pos(i) + m_workspaceOffset(i)*0)
-            * m_workspaceScale(i) * m_scale(i);
-        vel(i) = vel(i) * m_workspaceScale(i) * m_scale(i);
+            * m_workspaceScale(i);
+        vel(i) = vel(i) * m_workspaceScale(i);
     }
 
     if (changed)
@@ -226,7 +226,9 @@ void HapticsSim::step()
 
         // Compensate for workspace scaling
         cVector3d force = cursor->getDeviceGlobalForce();
-        force = force / (m_workspaceScale * m_scale);
+        force.set(force.x() / m_workspaceScale.x(),
+                  force.y() / m_workspaceScale.y(),
+                  force.z() / m_workspaceScale.z());
         cursor->setDeviceGlobalForce(force);
 
         m_cursor->addCursorMassForce();
@@ -436,17 +438,29 @@ void CHAIObject::on_set_stiffness(void* _me, OscScalar &s)
 void CHAIObject::on_set_texture_image(void* _me, OscString &s)
 {
     CHAIObject* me = static_cast<CHAIObject*>(_me);
-    me->m_chai_object->m_texture = cTexture2d::create();
-    if (!me->m_chai_object->m_texture->loadFromFile(s))
-    {
-        printf("[%s] Error loading texture image \"%s\".\n",
-               me->m_object->simulation()->type_str(), s.c_str());
-        return;
-    }
 
-    // enable texture mapping
-    me->m_chai_object->setUseTexture(true);
-    me->m_chai_object->m_material->setTextureLevel(1.0); // TODO expose this
+    if (!s.empty())
+    {
+        me->m_chai_object->m_texture = cTexture2d::create();
+        if (!me->m_chai_object->m_texture->loadFromFile(s))
+        {
+            printf("[%s] Error loading texture image \"%s\".\n",
+                   me->m_object->simulation()->type_str(), s.c_str());
+            return;
+        }
+        me->m_object->m_texture_level.m_value = 2.0;
+
+        // enable texture mapping
+        me->m_chai_object->setUseTexture(true);
+        me->m_chai_object->m_material->setTextureLevel(me->m_object->m_texture_level.m_value);
+        me->m_chai_object->m_texture->setEnabled(true);
+    }
+    else
+    {
+        me->m_chai_object->setUseTexture(false);
+        if (me->m_chai_object->m_texture)
+            me->m_chai_object->m_texture->setEnabled(false);
+    }
 }
 
 /****** OscSphereCHAI ******/

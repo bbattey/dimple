@@ -107,7 +107,6 @@ class InterfaceSim : public Simulation
     FWD_OSCVECTOR3(workspace_size, Simulation::ST_HAPTICS);
     FWD_OSCVECTOR3(workspace_center, Simulation::ST_HAPTICS);
 
-    FWD_OSCVECTOR3(scale, Simulation::ST_HAPTICS);
     FWD_OSCSCALAR(stiffness, Simulation::ST_HAPTICS);
     FWD_OSCSCALAR(grab_stiffness,Simulation::ST_HAPTICS);
     FWD_OSCSCALAR(grab_damping,Simulation::ST_HAPTICS);
@@ -281,6 +280,7 @@ public:
             m_visible.setGetCallback(on_get_visible, this);
             m_stiffness.setGetCallback(on_get_stiffness, this);
             m_texture_image.setGetCallback(on_get_texture_image, this);
+            m_texture_level.setGetCallback(on_get_texture_level, this);
 
             // TODO: also forward set handlers for magnitudes
 
@@ -322,6 +322,7 @@ protected:
     FWD_OSCBOOLEAN(visible,Simulation::ST_VISUAL);
     FWD_OSCSCALAR(stiffness,Simulation::ST_HAPTICS);
     FWD_OSCSTRING(texture_image,Simulation::ST_HAPTICS);
+    FWD_OSCSCALAR(texture_level,Simulation::ST_HAPTICS);
 };
 
 class OscPrismInterface : public OscPrism
@@ -343,6 +344,7 @@ public:
             m_visible.setGetCallback(on_get_visible, this);
             m_stiffness.setGetCallback(on_get_stiffness, this);
             m_texture_image.setGetCallback(on_get_texture_image, this);
+            m_texture_level.setGetCallback(on_get_texture_level, this);
 
             m_position.m_magnitude.setGetCallback(on_get_position_mag, this);
             m_velocity.m_magnitude.setGetCallback(on_get_velocity_mag, this);
@@ -382,6 +384,7 @@ protected:
     FWD_OSCBOOLEAN(visible,Simulation::ST_VISUAL);
     FWD_OSCSCALAR(stiffness,Simulation::ST_HAPTICS);
     FWD_OSCSTRING(texture_image,Simulation::ST_HAPTICS);
+    FWD_OSCSCALAR(texture_level,Simulation::ST_HAPTICS);
 };
 
 class OscMeshInterface : public OscMesh
@@ -404,6 +407,7 @@ public:
             m_visible.setGetCallback(on_get_visible, this);
             m_stiffness.setGetCallback(on_get_stiffness, this);
             m_texture_image.setGetCallback(on_get_texture_image, this);
+            m_texture_level.setGetCallback(on_get_texture_level, this);
 
             m_position.m_magnitude.setGetCallback(on_get_position_mag, this);
             m_velocity.m_magnitude.setGetCallback(on_get_velocity_mag, this);
@@ -443,6 +447,7 @@ protected:
     FWD_OSCBOOLEAN(visible,Simulation::ST_VISUAL);
     FWD_OSCSCALAR(stiffness,Simulation::ST_HAPTICS);
     FWD_OSCSTRING(texture_image,Simulation::ST_HAPTICS);
+    FWD_OSCSCALAR(texture_level,Simulation::ST_HAPTICS);
 };
 
 class OscCameraInterface : public OscCamera
